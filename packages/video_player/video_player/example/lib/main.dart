@@ -163,17 +163,18 @@ typedef Widget VideoWidgetBuilder(
     BuildContext context, VideoPlayerController controller);
 
 abstract class PlayerLifeCycle extends StatefulWidget {
-  PlayerLifeCycle(this.dataSource, this.childBuilder);
+  PlayerLifeCycle(this.dataSource, this.childBuilder, {this.formatHint = VideoFormat.other});
 
   final VideoWidgetBuilder childBuilder;
   final String dataSource;
+  final VideoFormat formatHint;
 }
 
 /// A widget connecting its life cycle to a [VideoPlayerController] using
 /// a data source from the network.
 class NetworkPlayerLifeCycle extends PlayerLifeCycle {
-  NetworkPlayerLifeCycle(String dataSource, VideoWidgetBuilder childBuilder)
-      : super(dataSource, childBuilder);
+  NetworkPlayerLifeCycle(String dataSource, VideoWidgetBuilder childBuilder, {VideoFormat formatHint = VideoFormat.other})
+      : super(dataSource, childBuilder, formatHint: formatHint);
 
   @override
   _NetworkPlayerLifeCycleState createState() => _NetworkPlayerLifeCycleState();
@@ -231,7 +232,7 @@ abstract class _PlayerLifeCycleState extends State<PlayerLifeCycle> {
 class _NetworkPlayerLifeCycleState extends _PlayerLifeCycleState {
   @override
   VideoPlayerController createVideoPlayerController() {
-    return VideoPlayerController.network(widget.dataSource);
+    return VideoPlayerController.network(widget.dataSource, formatHint: widget.formatHint);
   }
 }
 
@@ -413,10 +414,11 @@ class App extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(20),
                     child: NetworkPlayerLifeCycle(
-                      'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4',
+                        'https://devimages.apple.com.edgekey.net/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8',
                       (BuildContext context,
                               VideoPlayerController controller) =>
                           AspectRatioVideo(controller),
+                        formatHint: VideoFormat.hls,
                     ),
                   ),
                 ],

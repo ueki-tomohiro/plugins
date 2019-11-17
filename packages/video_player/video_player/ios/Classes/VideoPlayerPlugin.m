@@ -42,6 +42,7 @@ int64_t FLTCMTimeToMillis(CMTime time) {
 @property(nonatomic) bool isLooping;
 @property(nonatomic, readonly) bool isInitialized;
 - (instancetype)initWithURL:(NSURL*)url frameUpdater:(FLTFrameUpdater*)frameUpdater;
+- (instancetype)initWithHlsURL:(NSURL*)url frameUpdater:(FLTFrameUpdater*)frameUpdater;
 - (void)play;
 - (void)pause;
 - (void)setIsLooping:(bool)isLooping;
@@ -162,6 +163,11 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   return [self initWithPlayerItem:item frameUpdater:frameUpdater];
 }
 
+- (instancetype)initWithHlsURL:(NSURL*)url frameUpdater:(FLTFrameUpdater*)frameUpdater {
+  AVPlayerItem* item = [AVPlayerItem playerItemWithURL:url];
+  return [self initWithHlsPlayerItem:item frameUpdater:frameUpdater];
+}
+
 - (CGAffineTransform)fixTransform:(AVAssetTrack*)videoTrack {
   CGAffineTransform transform = videoTrack.preferredTransform;
   // TODO(@recastrodiaz): why do we need to do this? Why is the preferredTransform incorrect?
@@ -223,6 +229,69 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
   _player = [AVPlayer playerWithPlayerItem:item];
   _player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
+
+  [self createVideoOutputAndDisplayLink:frameUpdater];
+
+  [self addObservers:item];
+
+  [asset loadValuesAsynchronouslyForKeys:@[ @"tracks" ] completionHandler:assetCompletionHandler];
+
+  return self;
+}
+
+- (instancetype)initWithHlsPlayerItem:(AVPlayerItem*)item frameUpdater:(FLTFrameUpdater*)frameUpdater {
+  self = [super init];
+  NSAssert(self, @"super init cannot be nil");
+  _isInitialized = false;
+  _isPlaying = false;
+  _disposed = false;
+
+  NSLog(@"initWithHlsPlayerItem");
+
+  AVAsset* asset = [item asset];
+  void (^assetCompletionHandler)(void) = ^{
+    if ([asset statusOfValueForKey:@"tracks" error:nil] == AVKeyValueStatusLoaded) {
+      NSArray* tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
+      if ([tracks count] > 0) {
+        AVAssetTrack* videoTrack = tracks[0];
+        void (^trackCompletionHandler)(void) = ^{
+          if (self->_disposed) return;
+          if ([videoTrack statusOfValueForKey:@"preferredTransform"
+                                        error:nil] == AVKeyValueStatusLoaded) {
+            // Rotate the video by using a videoComposition and the preferredTransform
+            self->_preferredTransform = [self fixTransform:videoTrack];
+            // Note:
+            // https://developer.apple.com/documentation/avfoundation/avplayeritem/1388818-videocomposition
+            // Video composition can only be used with file-based media and is not supported for
+            // use with media served using HTTP Live Streaming.
+            AVMutableVideoComposition* videoComposition =
+                [self getVideoCompositionWithTransform:self->_preferredTransform
+                                             withAsset:asset
+                                        withVideoTrack:videoTrack];
+            item.videoComposition = videoComposition;
+          }
+        };
+        [videoTrack loadValuesAsynchronouslyForKeys:@[ @"preferredTransform" ]
+                                  completionHandler:trackCompletionHandler];
+      }
+    }
+  };
+
+  [asset loadValuesAsynchronouslyForKeys:@[ @"playable" ]
+                                completionHandler:^{
+                                    NSLog(@"playable %d", asset.playable);
+                                }];
+
+  [asset loadValuesAsynchronouslyForKeys:@[ @"duration" ]
+                            completionHandler:^{
+                                Float64 duration = CMTimeGetSeconds(asset.duration);
+                                NSLog(@"duration %f", duration);
+                            }];
+
+  _player = [AVPlayer playerWithPlayerItem:item];
+  _player.allowsExternalPlayback = NO;
+  _player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
+  _player.usesExternalPlaybackWhileExternalScreenIsActive = YES;
 
   [self createVideoOutputAndDisplayLink:frameUpdater];
 
@@ -467,6 +536,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     FLTFrameUpdater* frameUpdater = [[FLTFrameUpdater alloc] initWithRegistry:_registry];
     NSString* assetArg = argsMap[@"asset"];
     NSString* uriArg = argsMap[@"uri"];
+    NSString* formatHintArg = argsMap[@"formatHint"];
     FLTVideoPlayer* player;
     if (assetArg) {
       NSString* assetPath;
@@ -479,8 +549,14 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
       player = [[FLTVideoPlayer alloc] initWithAsset:assetPath frameUpdater:frameUpdater];
       [self onPlayerSetup:player frameUpdater:frameUpdater result:result];
     } else if (uriArg) {
-      player = [[FLTVideoPlayer alloc] initWithURL:[NSURL URLWithString:uriArg]
-                                      frameUpdater:frameUpdater];
+      NSLog(@"Player.create %@", uriArg);
+      if ([formatHintArg isEqual:@"hls"]) {
+          player = [[FLTVideoPlayer alloc] initWithHlsURL:[NSURL URLWithString:uriArg]
+                                          frameUpdater:frameUpdater];
+      } else {
+          player = [[FLTVideoPlayer alloc] initWithURL:[NSURL URLWithString:uriArg]
+                                          frameUpdater:frameUpdater];
+      }
       [self onPlayerSetup:player frameUpdater:frameUpdater result:result];
     } else {
       result(FlutterMethodNotImplemented);
